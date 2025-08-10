@@ -74,6 +74,11 @@ class DynamicLayer(CacheLayerMixin):
     """
 
     is_sliding = False
+    
+    def __init__(self):
+        super().__init__()  # calls CacheLayerMixin.__init__() → sets self.keys, self.values = None
+        self.full_precision_keys = None
+        self.full_precision_values = None
 
     def update(
         self,
@@ -98,9 +103,13 @@ class DynamicLayer(CacheLayerMixin):
         if self.keys is None:
             self.keys = key_states
             self.values = value_states
+            self.full_precision_keys = key_states
+            self.full_precision_values = value_states
         else:
             self.keys = torch.cat([self.keys, key_states], dim=-2)
             self.values = torch.cat([self.values, value_states], dim=-2)
+            self.full_precision_keys = torch.cat([self.full_precision_keys, key_states], dim=-2)
+            self.full_precision_values = torch.cat([self.full_precision_values, value_states], dim=-2)
         return self.keys, self.values
 
     def get_seq_length(self, cache_position=None) -> int:
@@ -680,6 +689,8 @@ class QuantizedCacheProcessor(CacheProcessor):
         residual_length: int = 128,
         compute_dtype: torch.dtype = torch.float16,
         device: str = "cpu",
+        k_restore: int = 32, 
+        restore_metric: str = "abs",
     ):
         """
         Parameters:
@@ -715,6 +726,9 @@ class QuantizedCacheProcessor(CacheProcessor):
 
         self.validate()
         self.erased_length = 0
+        
+        self.k_restore = k_restore
+        self.restore_metric = restore_metric
 
         # Only compatible with DynamicCache
         if not isinstance(cache.layers[0], DynamicLayer):
@@ -830,8 +844,81 @@ class QuantizedCacheProcessor(CacheProcessor):
                     dtype=value_tensors.dtype,
                     device=value_tensors.device,
                 )
+                
+        # print("keys to return shape:", keys_to_return.shape)
+        # print("values to return shape:", values_to_return.shape)
+        
+        
+        if self.k_restore > 0:
+            # print("Restoring full-precision top-k channels...")
+            keys_to_return, values_to_return = self._restore_fp_topk(
+                cache, layer_idx, keys_to_return, values_to_return
+            )
 
         return keys_to_return, values_to_return
+    
+    @torch.no_grad()
+    def _restore_fp_topk(
+        self,
+        cache: "Cache",
+        layer_idx: int,
+        k_ret: torch.Tensor,
+        v_ret: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        For each (B,H,T), pick the top-k channels along Dh from `k_ret`/`v_ret`, and
+        replace those channels with corresponding entries from the full-precision cache.
+        """
+        print("Restoring full-precision top-k channels...")
+        layer = cache.layers[layer_idx]
+        fp_k = getattr(layer, "full_precision_keys", None)
+        fp_v = getattr(layer, "full_precision_values", None)
+        if fp_k is None or fp_v is None:
+            print("Full precision keys/values not found, skipping restoration.")
+            return k_ret, v_ret
+
+        # Align shapes (best-effort: use the last T tokens if FP is longer).
+        B, H, T, Dh = k_ret.shape
+        if fp_k.shape[-2] != T:
+            print("Shape mismatch")
+            return k_ret, v_ret
+            fp_k = fp_k[..., -T:, :]
+            fp_v = fp_v[..., -T:, :]
+
+        if fp_k.shape != k_ret.shape or fp_v.shape != v_ret.shape:
+            # shape mismatch we can't reconcile safely → skip
+            print("Shape mismatch between full-precision and quantized caches, skipping restoration.")
+            return k_ret, v_ret
+
+        fp_k = fp_k.to(k_ret.device, dtype=k_ret.dtype)
+        fp_v = fp_v.to(v_ret.device, dtype=v_ret.dtype)
+
+        k = min(self.k_restore, Dh)
+
+        # Scores for top-k along last dim
+        if self.restore_metric == "l2":
+            score_k = k_ret.pow(2)
+            score_v = v_ret.pow(2)
+        else:  # "abs"
+            score_k = k_ret.abs()
+            score_v = v_ret.abs()
+
+        # Indices of top-k per (B,H,T)
+        idx_k = torch.topk(score_k, k, dim=-1, sorted=False).indices  # [B,H,T,k]
+        idx_v = torch.topk(score_v, k, dim=-1, sorted=False).indices  # [B,H,T,k]
+
+        # Gather full-precision values at those indices
+        fp_sel_k = torch.gather(fp_k, -1, idx_k)  # [B,H,T,k]
+        fp_sel_v = torch.gather(fp_v, -1, idx_v)  # [B,H,T,k]
+
+        # Scatter into copies of the dequantized outputs
+        k_out = k_ret.clone()
+        v_out = v_ret.clone()
+        k_out.scatter_(-1, idx_k, fp_sel_k)
+        v_out.scatter_(-1, idx_v, fp_sel_v)
+
+        return k_out, v_out
+
 
     def _quantize(self, tensor: torch.Tensor, axis: int) -> torch.Tensor:
         """Quantize a tensor - to be implemented by specific quantization backends."""
