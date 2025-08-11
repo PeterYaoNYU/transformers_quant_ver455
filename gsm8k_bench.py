@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 MODEL_ID = "Qwen/Qwen3-32B"      # ← your “old model”; change to "Qwen/Qwen3-14B" if you like
 USE_THINKING = True            # set True only if using 14B thinking mode
 
-exp_prefix = "k=32_abs_v2"  # experiment name for output files
+exp_prefix = "k=aquarter_abs_global_v2"  # experiment name for output files
 
 # ---------- regex helpers ----------
 _PAT_BOX  = re.compile(r"\\boxed\{([^}]*)\}")
@@ -54,7 +54,7 @@ def worker(rank: int, gpu_id: int, idxs: list, out_dir: str):
         torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
     ).to(device).eval()
 
-    ds = load_dataset("openai/gsm8k", "main", split="test[:100]")
+    ds = load_dataset("openai/gsm8k", "main", split="test[:10]")
 
     gen_kwargs = dict(
         do_sample=True, temperature=0.6, top_p=0.95, top_k=20,

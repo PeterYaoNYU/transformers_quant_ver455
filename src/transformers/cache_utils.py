@@ -79,6 +79,8 @@ class DynamicLayer(CacheLayerMixin):
         super().__init__()  # calls CacheLayerMixin.__init__() → sets self.keys, self.values = None
         self.full_precision_keys = None
         self.full_precision_values = None
+        
+        # self.erased_length = 0
 
     def update(
         self,
@@ -114,8 +116,15 @@ class DynamicLayer(CacheLayerMixin):
 
     def get_seq_length(self, cache_position=None) -> int:
         """Returns the sequence length of the cached states."""
+        # print("begin get_seq_length")
         if self.keys is None or self.keys.numel() == 0:
             return 0
+        
+        # if self.erased_length > 0:
+        #     print("returning erased_length + keys.shape[-2]")
+        #     return self.erased_length + self.keys.shape[-2]
+
+        # print("finish get_seq_length, returning: ", self.keys.shape[-2])
         return self.keys.shape[-2]
 
     def get_max_cache_shape(self) -> int:
@@ -807,6 +816,7 @@ class QuantizedCacheProcessor(CacheProcessor):
             self._quantized_values.append(self._quantize(value_tensors.contiguous(), axis=self.axis_value))
 
             # Clear the residual cache
+            # -2 dimension should be the sequence length, 
             self.erased_length = key_tensors.shape[-2]
             cache.layers[layer_idx].keys = torch.zeros(
                 0,
@@ -834,6 +844,10 @@ class QuantizedCacheProcessor(CacheProcessor):
 
                 # Clear the residual cache
                 self.erased_length += key_tensors.shape[-2]
+                # for l in cache.layers:
+                #     l.erased_length = self.erased_length
+                #     print(f"Erased length for layer {l.layer_idx} is now {l.erased_length}")
+                
                 cache.layers[layer_idx].keys = torch.zeros(
                     0,
                     dtype=key_tensors.dtype,
@@ -851,9 +865,16 @@ class QuantizedCacheProcessor(CacheProcessor):
         
         if self.k_restore > 0:
             # print("Restoring full-precision top-k channels...")
-            keys_to_return, values_to_return = self._restore_fp_topk(
+            # keys_to_return, values_to_return = self._restore_fp_topk(
+            #     cache, layer_idx, keys_to_return, values_to_return
+            # )
+            
+            s_to_return, values_to_return = self._restore_fp_global_topk(
                 cache, layer_idx, keys_to_return, values_to_return
             )
+            
+        keys_to_return = keys_to_return.contiguous()
+        values_to_return = values_to_return.contiguous()
 
         return keys_to_return, values_to_return
     
@@ -918,6 +939,94 @@ class QuantizedCacheProcessor(CacheProcessor):
         v_out.scatter_(-1, idx_v, fp_sel_v)
 
         return k_out, v_out
+    
+    
+    @torch.no_grad()
+    def _restore_fp_global_topk(
+        self,
+        cache: "Cache",
+        layer_idx: int,
+        k_ret: torch.Tensor,
+        v_ret: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Replace the top proportion of *all elements* (B*H*T*Dh) in k_ret and v_ret
+        with the corresponding full-precision entries stored on the layer.
+
+        Semantics for `self.k_restore`:
+          - If k_restore >= 1: interpret as a divisor (e.g., 4 -> replace 1/4 of elements)
+          - If 0 < k_restore < 1: interpret as a fraction (e.g., 0.25 -> replace 25% of elements)
+        """
+        layer = cache.layers[layer_idx]
+        fp_k = getattr(layer, "full_precision_keys", None)
+        fp_v = getattr(layer, "full_precision_values", None)
+        if fp_k is None or fp_v is None:
+            # nothing to restore from
+            return k_ret, v_ret
+
+        # align seq length with the returned tensors (use the most recent T if FP is longer)
+        B, H, T, Dh = k_ret.shape
+        if fp_k.shape[-2] != T:
+            fp_k = fp_k[..., -T:, :]
+            fp_v = fp_v[..., -T:, :]
+
+        # shapes must match to safely restore
+        if fp_k.shape != k_ret.shape or fp_v.shape != v_ret.shape:
+            return k_ret, v_ret
+
+        # move/cast FP to match current return tensors
+        fp_k = fp_k.to(k_ret.device, dtype=k_ret.dtype)
+        fp_v = fp_v.to(v_ret.device, dtype=v_ret.dtype)
+
+        # decide how many elements to restore
+        def _count_to_restore(x_numel: int) -> int:
+            k = float(self.k_restore)
+            if k <= 0:
+                return 0
+            frac = (1.0 / k) if k >= 1.0 else k  # divisor vs fraction
+            m = int(x_numel * frac)
+            return max(1, min(x_numel, m))
+
+        # choose scoring (abs or l2) and flatten once
+        if self.restore_metric == "l2":
+            score_k = k_ret.pow(2).reshape(-1)
+            score_v = v_ret.pow(2).reshape(-1)
+        else:  # "abs"
+            score_k = k_ret.abs().reshape(-1)
+            score_v = v_ret.abs().reshape(-1)
+
+        # how many elements to replace
+        n_k = _count_to_restore(score_k.numel())
+        n_v = _count_to_restore(score_v.numel())
+        if n_k == 0 and n_v == 0:
+            return k_ret, v_ret
+
+        # top indices (global over all elements)
+        # sorted=False is fine since we just need the set of indices
+        idx_k = torch.topk(score_k, n_k, largest=True, sorted=False).indices if n_k > 0 else None
+        idx_v = torch.topk(score_v, n_v, largest=True, sorted=False).indices if n_v > 0 else None
+        
+        # debugging 
+        # print("idx k shape:", idx_k.shape if idx_k is not None else None)
+        # print("idx v shape:", idx_v.shape if idx_v is not None else None)
+        
+        # write back using flattened views for minimal overhead
+        # potentially can be optimized with scatter_
+        k_out = k_ret.clone()
+        v_out = v_ret.clone()
+
+        if idx_k is not None:
+            k_out_flat = k_out.reshape(-1)
+            fp_k_flat = fp_k.reshape(-1)
+            k_out_flat[idx_k] = fp_k_flat[idx_k]
+
+        if idx_v is not None:
+            v_out_flat = v_out.reshape(-1)
+            fp_v_flat = fp_v.reshape(-1)
+            v_out_flat[idx_v] = fp_v_flat[idx_v]
+
+        return k_out, v_out
+
 
 
     def _quantize(self, tensor: torch.Tensor, axis: int) -> torch.Tensor:
