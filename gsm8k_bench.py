@@ -54,7 +54,7 @@ def worker(rank: int, gpu_id: int, idxs: list, out_dir: str):
         torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
     ).to(device).eval()
 
-    ds = load_dataset("openai/gsm8k", "main", split="test[:10]")
+    ds = load_dataset("openai/gsm8k", "main", split="test[:12]")
 
     gen_kwargs = dict(
         do_sample=True, temperature=0.6, top_p=0.95, top_k=20,

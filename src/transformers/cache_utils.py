@@ -869,7 +869,7 @@ class QuantizedCacheProcessor(CacheProcessor):
             #     cache, layer_idx, keys_to_return, values_to_return
             # )
             
-            s_to_return, values_to_return = self._restore_fp_global_topk(
+            keys_to_return, values_to_return = self._restore_fp_global_topk(
                 cache, layer_idx, keys_to_return, values_to_return
             )
             

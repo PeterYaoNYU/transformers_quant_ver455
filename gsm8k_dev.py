@@ -13,7 +13,7 @@ USE_THINKING = True  # set True only if your checkpoint supports thinking mode
 
 # ---- quantized KV cache flags ----
 USE_QUANT_CACHE = True
-QUANT_BACKEND   = "HQQ"   # "HQQ" or "quanto"
+QUANT_BACKEND   = "quanto"   # "HQQ" or "quanto"
 N_BITS          = 4
 AXIS_KEY        = 1 if QUANT_BACKEND == "HQQ" else 0   # common HQQ choice is 1; quanto uses {0,-1}
 AXIS_VALUE      = 1 if QUANT_BACKEND == "HQQ" else 0
