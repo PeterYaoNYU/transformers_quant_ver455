@@ -31,9 +31,21 @@ _PAT_BOX  = re.compile(r"\\boxed\s*\{\s*([^{}]*)\s*\}")
 _PAT_HASH = re.compile(r"####\s*([^\n]+)")
 _PAT_NUM  = re.compile(r"-?\d+(?:\.\d+)?")
 
+_INSTR_EMPTY_BOX = re.compile(
+    r"(?is)please\s+reason[\s\S]*?final\s+answer\s+within\s*\\boxed\s*\{\s*\}\.?"
+)
+_INSTR_EMPTY_BOX_SHORT = re.compile(
+    r"(?is)final\s+answer\s+within\s*\\boxed\s*\{\s*\}\.?"
+)
 
+def _preclean(t: str) -> str:
+    # remove the instructional line that contains the empty \boxed{ }
+    t = _INSTR_EMPTY_BOX.sub("", t)
+    t = _INSTR_EMPTY_BOX_SHORT.sub("", t)
+    return t
 
 def extract_final(t: str) -> str:
+    t = _preclean(t)
     # 1) get all boxed matches
     boxes = [m.group(1).strip() for m in _PAT_BOX.finditer(t)]
 
