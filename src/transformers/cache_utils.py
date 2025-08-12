@@ -516,7 +516,7 @@ class QuantizedLayer(DynamicLayer):
         q_group_size: int = 64,
         residual_length: int = 128,
     ):
-        super().__init__(self)
+        super().__init__()
         self.nbits = nbits
         self.axis_key = axis_key
         self.axis_value = axis_value
@@ -545,6 +545,8 @@ class QuantizedLayer(DynamicLayer):
             A tuple containing the updated key and value states.
         """
         self.cumulative_length += key_states.shape[-2]
+        
+        # print(f"updating quantize cache")
 
         # Lazy initialization
         if self.keys is None:
