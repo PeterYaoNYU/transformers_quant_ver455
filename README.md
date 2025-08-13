@@ -10,3 +10,5 @@ It runs with a batch size = 1. For some unknown reasons, this version allows onl
 Quanto is problematic on my machine. 
 
 This version of transformers gives suboptimal performance. 
+
+should check cases where batch size > 1
