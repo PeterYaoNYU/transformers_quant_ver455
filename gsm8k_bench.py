@@ -6,21 +6,52 @@ import torch
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
-MODEL_ID = "Qwen/Qwen3-32B"      # ← your “old model”; change to "Qwen/Qwen3-14B" if you like
+MODEL_ID = "Qwen/Qwen3-8B"      # ← your “old model”; change to "Qwen/Qwen3-14B" if you like
 USE_THINKING = True            # set True only if using 14B thinking mode
 
-exp_prefix = "k=aquarter_abs_global_v2"  # experiment name for output files
+exp_prefix = "k=original_no_int4_hqq"  # experiment name for output files
 
 # ---------- regex helpers ----------
 _PAT_BOX  = re.compile(r"\\boxed\{([^}]*)\}")
 _PAT_HASH = re.compile(r"####\s*([^\n]+)")
 _PAT_NUM  = re.compile(r"-?\d+(?:\.\d+)?")
 
-def extract_final(text: str) -> str:
-    m = _PAT_BOX.search(text)
-    s = m.group(1) if m else (_PAT_HASH.search(text).group(1) if _PAT_HASH.search(text) else text)
-    nums = _PAT_NUM.findall(s)
-    return nums[-1] if nums else s.strip()
+_INSTR_EMPTY_BOX = re.compile(
+    r"(?is)please\s+reason[\s\S]*?final\s+answer\s+within\s*\\boxed\s*\{\s*\}\.?"
+)
+_INSTR_EMPTY_BOX_SHORT = re.compile(
+    r"(?is)final\s+answer\s+within\s*\\boxed\s*\{\s*\}\.?"
+)
+
+def _preclean(t: str) -> str:
+    # remove the instructional line that contains the empty \boxed{ }
+    t = _INSTR_EMPTY_BOX.sub("", t)
+    t = _INSTR_EMPTY_BOX_SHORT.sub("", t)
+    return t
+
+def extract_final(t: str) -> str:
+    t = _preclean(t)
+    
+    boxes = [m.group(1).strip() for m in _PAT_BOX.finditer(t)]
+    for s in reversed(boxes):
+        nums = _PAT_NUM.findall(s)
+        if nums:
+            return nums[-1]
+    for s in reversed(boxes):
+        if s:
+            return s
+    m = _PAT_HASH.search(t)
+    if m:
+        s = m.group(1).strip()
+        nums = _PAT_NUM.findall(s)
+        return (nums[-1] if nums else s)
+    m = re.search(r"(?i)final\s*answer[:\s-]*([^\n]+)", t)
+    if m:
+        s = m.group(1).strip()
+        nums = _PAT_NUM.findall(s)
+        return (nums[-1] if nums else s)
+    nums = _PAT_NUM.findall(t)
+    return (nums[-1] if nums else t.strip())
 
 def extract_gold(answer: str) -> str:
     m = _PAT_HASH.search(answer)
@@ -57,10 +88,10 @@ def worker(rank: int, gpu_id: int, idxs: list, out_dir: str):
     ds = load_dataset("openai/gsm8k", "main", split="test[:12]")
 
     gen_kwargs = dict(
-        do_sample=True, temperature=0.6, top_p=0.95, top_k=20,
+        do_sample=False, temperature=None, top_p=None, top_k=None,
         max_new_tokens=3500, pad_token_id=tokenizer.eos_token_id,
-        cache_implementation="quantized",
-        cache_config={"backend": "HQQ", "nbits": 4},  # HQQ + bs=1
+        # cache_implementation="quantized",
+        # cache_config={"backend": "HQQ", "nbits": 4},  # HQQ + bs=1
     )
 
     correct = 0

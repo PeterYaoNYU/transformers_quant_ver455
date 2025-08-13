@@ -863,15 +863,15 @@ class QuantizedCacheProcessor(CacheProcessor):
         # print("values to return shape:", values_to_return.shape)
         
         
-        if self.k_restore > 0:
-            # print("Restoring full-precision top-k channels...")
-            # keys_to_return, values_to_return = self._restore_fp_topk(
-            #     cache, layer_idx, keys_to_return, values_to_return
-            # )
+        # if self.k_restore > 0:
+        #     # print("Restoring full-precision top-k channels...")
+        #     # keys_to_return, values_to_return = self._restore_fp_topk(
+        #     #     cache, layer_idx, keys_to_return, values_to_return
+        #     # )
             
-            keys_to_return, values_to_return = self._restore_fp_global_topk(
-                cache, layer_idx, keys_to_return, values_to_return
-            )
+        #     keys_to_return, values_to_return = self._restore_fp_global_topk(
+        #         cache, layer_idx, keys_to_return, values_to_return
+        #     )
             
         keys_to_return = keys_to_return.contiguous()
         values_to_return = values_to_return.contiguous()
