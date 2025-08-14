@@ -10,11 +10,12 @@ from tqdm import tqdm
 
 import argparse
 
-MODEL_ID = "Qwen/Qwen3-32B"
-USE_THINKING = True
+MODEL_ID = "Qwen/Qwen3-8B"
+USE_THINKING = False
+
 
 # ---- batching ----
-BATCH_SIZE = 16
+BATCH_SIZE = 50
 
 # ---- quantized KV cache flags ----
 USE_QUANT_CACHE = True
@@ -25,7 +26,7 @@ AXIS_VALUE      = 1 if QUANT_BACKEND == "HQQ" else 0
 Q_GROUP_SIZE    = 64
 RESIDUAL_LEN    = 128
 
-MAX_NEW_TOKENS = 3500
+MAX_NEW_TOKENS = 1800
 
 INPUT_FOLDER = "math_sampled_dataset"
 
@@ -307,9 +308,9 @@ def main():
     subset_spec = "train[:28]"  # change as needed
 
     if USE_QUANT_CACHE:
-        out_dir = "mg_out_longer_quant_math_150"
+        out_dir = "mg_out_longer_quant_math_150_nocot"
     else:
-        out_dir = "mg_out_longer_noquant_math_150"
+        out_dir = "mg_out_longer_noquant_math_150_nocot"
 
 
 
@@ -332,6 +333,10 @@ def main():
         for p in procs:
             p.join()
         merge_parts(world_size, out_dir)
+    # world_size = 4
+    # out_dir = "mg_out_longer_noquant_math_150"
+    # merge_parts(world_size, out_dir)
+    
 
 if __name__ == "__main__":
     main()

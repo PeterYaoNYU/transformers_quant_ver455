@@ -22,3 +22,46 @@ USE_QUANT_CACHE=True
 Do the reverse to do no KV quant. 
 
 
+```
+rm -rf mkdir wrong_quant_math_nocot 
+rm -rf correct_quant_math_nocot
+mkdir wrong_quant_math_nocot 
+cp mg_out_longer_quant_math_150_nocot/*merged.jsonl wrong_quant_math_nocot/
+
+python3 copy_correct_answers_folder.py --wrong-dir wrong_quant_math_nocot/ --correct-dir math_sampled_dataset/ --out-dir correct_quant_math_nocot
+
+python3 evaluate_math_new.py correct_quant_math_nocot/
+
+
+
+
+
+rm -rf mkdir wrong_noquant_math_nocot 
+rm -rf correct_noquant_math_nocot
+mkdir wrong_noquant_math_nocot 
+cp mg_out_longer_noquant_math_150_nocot/*merged.jsonl wrong_noquant_math_nocot/
+
+python3 copy_correct_answers_folder.py --wrong-dir wrong_noquant_math_nocot/ --correct-dir math_sampled_dataset/ --out-dir correct_noquant_math_nocot
+
+python3 evaluate_math_new.py correct_noquant_math_nocot/
+
+
+
+
+
+mkdir wrong_quant_math_cot 
+cp mg_out_longer_quant_math_150/*merged.jsonl wrong_quant_math_cot/
+
+python3 copy_correct_answers_folder.py --wrong-dir wrong_quant_math_cot/ --correct-dir math_sampled_dataset/ --out-dir correct_quant_math_cot
+
+python3 evaluate_math_new.py correct_quant_math_cot/
+
+
+
+mkdir wrong_noquant_math_cot 
+cp mg_out_longer_noquant_math_150/*merged.jsonl wrong_noquant_math_cot/
+
+python3 copy_correct_answers_folder.py --wrong-dir wrong_noquant_math_cot/ --correct-dir math_sampled_dataset/ --out-dir correct_noquant_math_cot
+
+python3 evaluate_math_new.py correct_noquant_math_cot/
+```
