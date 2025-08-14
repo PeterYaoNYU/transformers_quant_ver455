@@ -8,14 +8,14 @@ from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM, QuantoQuantizedCache, HQQQuantizedCache
 from tqdm import tqdm
 
-MODEL_ID = "Qwen/Qwen3-8B"
+MODEL_ID = "Qwen/Qwen3-32B"
 USE_THINKING = True
 
 # ---- batching ----
-BATCH_SIZE = 32
+BATCH_SIZE = 7
 
 # ---- quantized KV cache flags ----
-USE_QUANT_CACHE = False
+USE_QUANT_CACHE = True
 QUANT_BACKEND   = "HQQ"   # "HQQ" or "quanto"
 N_BITS          = 4
 AXIS_KEY        = 1 if QUANT_BACKEND == "HQQ" else 0
@@ -111,20 +111,28 @@ def run_worker(rank: int, world_size: int, subset_spec: str, out_dir: str):
         torch_dtype=torch.float16 if device.type == "cuda" else torch.float32,
     ).to(device).eval()
 
-    ds = load_dataset("openai/gsm8k", "main", split=subset_spec)
+
+
+    # ds = load_dataset("yentinglin/aime_2025", "default", split=subset_spec)
+    ds = load_dataset("Maxwell-Jia/AIME_2024", "default", split=subset_spec)
+    
     N = len(ds)
 
     # Shard dataset into contiguous chunks for better padding efficiency
-    per_rank = (N + world_size - 1) // world_size
-    start = rank * per_rank
-    end   = min(N, (rank + 1) * per_rank)
-    if start >= end:
-        return  # this rank has nothing
+    base = N // world_size
+    rem  = N % world_size
+
+    size  = base + 1 if rank < rem else base
+    start = rank * base + min(rank, rem)
+    end   = start + size
+
+    if size == 0:
+        return  # this rank has nothing to process
 
     # Generation kwargs (you can tune)
     gen_kwargs = dict(
         do_sample=False, temperature=None, top_p=None, top_k=None,
-        max_new_tokens=3500,
+        max_new_tokens=7000,
         pad_token_id=tokenizer.eos_token_id,
         use_cache=True,
         eos_token_id=tokenizer.eos_token_id,
@@ -151,8 +159,8 @@ def run_worker(rank: int, world_size: int, subset_spec: str, out_dir: str):
             batch_end = min(end, batch_start + BATCH_SIZE)
             idxs = list(range(batch_start, batch_end))
 
-            questions = [ds[i]["question"] for i in idxs]
-            golds     = [extract_gold(ds[i]["answer"]) for i in idxs]
+            questions = [ds[i]["Problem"] for i in idxs]
+            golds     = [extract_gold(ds[i]["Solution"]) for i in idxs]
             prompts   = [build_prompt(tokenizer, q) for q in questions]
 
             toks = tokenizer(prompts, return_tensors="pt", padding=True)
@@ -185,7 +193,7 @@ def run_worker(rank: int, world_size: int, subset_spec: str, out_dir: str):
 
                 correct += int(ok)
                 rec = {
-                    "idx": i, "question": ds[i]["question"],
+                    "idx": i, "question": ds[i]["Problem"],
                     "pred_raw": text, "pred": pred, "gold": gold, "correct": bool(ok),
                 }
                 records.append(rec)
@@ -216,8 +224,8 @@ def merge_parts(world_size: int, out_dir: str):
     print(f"[MERGE] Wrote {merged}")
 
 def main():
-    subset_spec = "test[:128]"  # change as needed
-    out_dir = "mg_out_longer_noquant"
+    subset_spec = "train[:28]"  # change as needed
+    out_dir = "mg_out_longer_quant_aime_24"
 
     # If launched by torchrun, use its env; else spawn world_size=NGPUs
     env_world = os.environ.get("WORLD_SIZE")
